@@ -25,36 +25,55 @@ def test_database_url_pattern(database_url):
 
 
 def setup_database(database_url, database_path):
+    database_name = re.search(r'[^\/]+$', database_url)
     database_url = re.sub(r'\\', '/', database_url)
     database_url = re.sub(r'/$', '', database_url)
     database_path = re.sub(r'\\', '/', database_path)
     database_path = re.sub(r'/$', '', database_path)
+
     unify_database_name = os.environ.get('UNIFY_DATABASE_NAME', 'True').lower() == 'true'
 
-    if unify_database_name:
-        database_name = re.search(r'[^\/]+$', database_url)
-        found_database_name = database_name != None
+    m_mysql, m_postgres, m_sqlite = test_database_url_pattern(database_url)
 
-        DB_APSCHEDULER = database_name.group() if found_database_name else DB_APSCHEDULER
-        DB_TIMERTASKS = database_name.group() if found_database_name else DB_TIMERTASKS
-        DB_METADATA = database_name.group() if found_database_name else DB_METADATA
-        DB_JOBS = database_name.group() if found_database_name else DB_JOBS
+    if unify_database_name & (database_name != None):
+        DB_APSCHEDULER = database_name.group()
+        DB_TIMERTASKS = database_name.group()
+        DB_METADATA = database_name.group()
+        DB_JOBS = database_name.group()
         DBS = [DB_APSCHEDULER, DB_TIMERTASKS, DB_METADATA, DB_JOBS]
 
-        unify_database_name = found_database_name
+        try:
+            require_version = '2.7.7'  # Jan 23, 2019
+            install_command = "pip install --upgrade psycopg2"
+            try:
+                import psycopg2
+                assert psycopg2.__version__ >= require_version, install_command
+            except (ImportError, AssertionError):
+                sys.exit("Run command: %s" % install_command)
 
-    m_mysql, m_postgres, m_sqlite = test_database_url_pattern(database_url)
-    if m_mysql:
-        setup_mysql(*m_mysql.groups())
-    elif m_postgres:
-        setup_postgresql(*m_postgres.groups(), unify_database_name)
-    else:
-        database_path = m_sqlite.group(1) if m_sqlite else database_path
-        database_path = os.path.abspath(database_path)
-        database_path = re.sub(r'\\', '/', database_path)
-        database_path = re.sub(r'/$', '', database_path)
-        if not os.path.isdir(database_path):
-            os.mkdir(database_path)
+            groups = m_postgres.groups()
+            conn = psycopg2.connect(dbname=database_name.group(), host=groups[2], port=int(groups[3]), user=groups[0], password=groups[1])
+            conn.set_isolation_level(0)  # https://wiki.postgresql.org/wiki/Psycopg2_Tutorial
+            curr = conn.cursor()
+            curr.close()
+            conn.close()
+        except Exception as err:
+            print(err)
+            raise
+
+
+    if not unify_database_name:
+        if m_mysql:
+            setup_mysql(*m_mysql.groups())
+        elif m_postgres:
+            setup_postgresql(*m_postgres.groups())
+        else:
+            database_path = m_sqlite.group(1) if m_sqlite else database_path
+            database_path = os.path.abspath(database_path)
+            database_path = re.sub(r'\\', '/', database_path)
+            database_path = re.sub(r'/$', '', database_path)
+            if not os.path.isdir(database_path):
+                os.mkdir(database_path)
 
     if m_mysql or m_postgres:
         APSCHEDULER_DATABASE_URI = database_url.replace('postgres://', 'postgresql://') if unify_database_name else '/'.join([database_url, DB_APSCHEDULER])
@@ -129,8 +148,7 @@ def setup_mysql(username, password, host, port):
     cur.close()
     conn.close()
 
-
-def setup_postgresql(username, password, host, port, unify_database_name):
+def setup_postgresql(username, password, host, port):
     """
     https://github.com/my8100/notes/blob/master/back_end/the-flask-mega-tutorial.md
     When working with database servers such as MySQL and PostgreSQL,
@@ -144,56 +162,43 @@ def setup_postgresql(username, password, host, port, unify_database_name):
     except (ImportError, AssertionError):
         sys.exit("Run command: %s" % install_command)
 
-    if unify_database_name:
-        for dbname in DBS:
-            try:
-                conn = psycopg2.connect(dbname=dbname, host=host, port=int(port), user=username, password=password)
-                conn.set_isolation_level(0)  # https://wiki.postgresql.org/wiki/Psycopg2_Tutorial
-                cur = conn.cursor()
-                curr.close()
-                conn.close()
+    conn = psycopg2.connect(dbname="postgres", host=host, port=int(port), user=username, password=password)
+    conn.set_isolation_level(0)  # https://wiki.postgresql.org/wiki/Psycopg2_Tutorial
+    cur = conn.cursor()
+    for dbname in DBS:
+        if SCRAPYDWEB_TESTMODE:
+            # database "scrapydweb_apscheduler" is being accessed by other users
+            # DETAIL:  There is 1 other session using the database.
+            # To restart postgres server on Windonws -> win+R: services.msc
+            drop_database(cur, dbname)
+
+        # https://www.postgresql.org/docs/9.0/sql-createdatabase.html
+        # https://stackoverflow.com/questions/9961795/
+        # utf8-postgresql-create-database-like-mysql-including-character-set-encoding-a
+
+        # psycopg2.ProgrammingError: invalid locale name: "en_US.UTF-8"
+        # https://stackoverflow.com/questions/40673339/
+        # creating-utf-8-database-in-postgresql-on-windows10
+
+        # cur.execute("CREATE DATABASE %s ENCODING 'UTF8' LC_COLLATE 'en-US' LC_CTYPE 'en-US'" % dbname)
+        # psycopg2.DataError: new collation (en-US) is incompatible with the collation of the template database
+        # (Chinese (Simplified)_People's Republic of China.936)
+        # HINT:  Use the same collation as in the template database, or use template0 as template.
+        try:
+            cur.execute("SELECT datname FROM pg_database WHERE datname = '%s';" % dbname)
+            list_database = cur.fetchall()
+
+            if len(list_database) > 0:
                 pass
-            except Exception as err:
-                print(err)
-                raise
-    else:
-        conn = psycopg2.connect(dbname="postgres", host=host, port=int(port), user=username, password=password)
-        conn.set_isolation_level(0)  # https://wiki.postgresql.org/wiki/Psycopg2_Tutorial
-        cur = conn.cursor()
-        for dbname in DBS:
-            if SCRAPYDWEB_TESTMODE:
-                # database "scrapydweb_apscheduler" is being accessed by other users
-                # DETAIL:  There is 1 other session using the database.
-                # To restart postgres server on Windonws -> win+R: services.msc
-                drop_database(cur, dbname)
-
-            # https://www.postgresql.org/docs/9.0/sql-createdatabase.html
-            # https://stackoverflow.com/questions/9961795/
-            # utf8-postgresql-create-database-like-mysql-including-character-set-encoding-a
-
-            # psycopg2.ProgrammingError: invalid locale name: "en_US.UTF-8"
-            # https://stackoverflow.com/questions/40673339/
-            # creating-utf-8-database-in-postgresql-on-windows10
-
-            # cur.execute("CREATE DATABASE %s ENCODING 'UTF8' LC_COLLATE 'en-US' LC_CTYPE 'en-US'" % dbname)
-            # psycopg2.DataError: new collation (en-US) is incompatible with the collation of the template database
-            # (Chinese (Simplified)_People's Republic of China.936)
-            # HINT:  Use the same collation as in the template database, or use template0 as template.
-            try:
-                cur.execute("SELECT datname FROM pg_database WHERE datname = '%s';" % dbname)
-                list_database = cur.fetchall()
-
-                if len(list_database) > 0:
-                    pass
-                else:
-                    create_db_postgres(dbname)
-                    
-            except Exception as err:
-                print(err)
+            else:
                 create_db_postgres(dbname)
-        
-        cur.close()
-        conn.close()
+                
+        except Exception as err:
+            print(err)
+            create_db_postgres(dbname)
+    
+    cur.close()
+    conn.close()
 
 def create_db_postgres(dbname):
     try:
