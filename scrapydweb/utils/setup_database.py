@@ -47,7 +47,7 @@ def setup_database(database_url, database_path):
     if m_mysql:
         setup_mysql(*m_mysql.groups())
     elif m_postgres:
-        setup_postgresql(*m_postgres.groups())
+        setup_postgresql(*m_postgres.groups(), unify_database_name)
     else:
         database_path = m_sqlite.group(1) if m_sqlite else database_path
         database_path = os.path.abspath(database_path)
@@ -130,7 +130,7 @@ def setup_mysql(username, password, host, port):
     conn.close()
 
 
-def setup_postgresql(username, password, host, port):
+def setup_postgresql(username, password, host, port, unify_database_name):
     """
     https://github.com/my8100/notes/blob/master/back_end/the-flask-mega-tutorial.md
     When working with database servers such as MySQL and PostgreSQL,
@@ -144,43 +144,56 @@ def setup_postgresql(username, password, host, port):
     except (ImportError, AssertionError):
         sys.exit("Run command: %s" % install_command)
 
-    conn = psycopg2.connect(dbname="postgres", host=host, port=int(port), user=username, password=password)
-    conn.set_isolation_level(0)  # https://wiki.postgresql.org/wiki/Psycopg2_Tutorial
-    cur = conn.cursor()
-    for dbname in DBS:
-        if SCRAPYDWEB_TESTMODE:
-            # database "scrapydweb_apscheduler" is being accessed by other users
-            # DETAIL:  There is 1 other session using the database.
-            # To restart postgres server on Windonws -> win+R: services.msc
-            drop_database(cur, dbname)
-
-        # https://www.postgresql.org/docs/9.0/sql-createdatabase.html
-        # https://stackoverflow.com/questions/9961795/
-        # utf8-postgresql-create-database-like-mysql-including-character-set-encoding-a
-
-        # psycopg2.ProgrammingError: invalid locale name: "en_US.UTF-8"
-        # https://stackoverflow.com/questions/40673339/
-        # creating-utf-8-database-in-postgresql-on-windows10
-
-        # cur.execute("CREATE DATABASE %s ENCODING 'UTF8' LC_COLLATE 'en-US' LC_CTYPE 'en-US'" % dbname)
-        # psycopg2.DataError: new collation (en-US) is incompatible with the collation of the template database
-        # (Chinese (Simplified)_People's Republic of China.936)
-        # HINT:  Use the same collation as in the template database, or use template0 as template.
-        try:
-            cur.execute("SELECT datname FROM pg_database WHERE datname = '%s';" % dbname)
-            list_database = cur.fetchall()
-
-            if len(list_database) > 0:
+    if unify_database_name:
+        for dbname in DBS:
+            try:
+                conn = psycopg2.connect(dbname=dbname, host=host, port=int(port), user=username, password=password)
+                conn.set_isolation_level(0)  # https://wiki.postgresql.org/wiki/Psycopg2_Tutorial
+                cur = conn.cursor()
+                curr.close()
+                conn.close()
                 pass
-            else:
+            except Exception as err:
+                print(err)
+                raise
+    else:
+        conn = psycopg2.connect(dbname="postgres", host=host, port=int(port), user=username, password=password)
+        conn.set_isolation_level(0)  # https://wiki.postgresql.org/wiki/Psycopg2_Tutorial
+        cur = conn.cursor()
+        for dbname in DBS:
+            if SCRAPYDWEB_TESTMODE:
+                # database "scrapydweb_apscheduler" is being accessed by other users
+                # DETAIL:  There is 1 other session using the database.
+                # To restart postgres server on Windonws -> win+R: services.msc
+                drop_database(cur, dbname)
+
+            # https://www.postgresql.org/docs/9.0/sql-createdatabase.html
+            # https://stackoverflow.com/questions/9961795/
+            # utf8-postgresql-create-database-like-mysql-including-character-set-encoding-a
+
+            # psycopg2.ProgrammingError: invalid locale name: "en_US.UTF-8"
+            # https://stackoverflow.com/questions/40673339/
+            # creating-utf-8-database-in-postgresql-on-windows10
+
+            # cur.execute("CREATE DATABASE %s ENCODING 'UTF8' LC_COLLATE 'en-US' LC_CTYPE 'en-US'" % dbname)
+            # psycopg2.DataError: new collation (en-US) is incompatible with the collation of the template database
+            # (Chinese (Simplified)_People's Republic of China.936)
+            # HINT:  Use the same collation as in the template database, or use template0 as template.
+            try:
+                cur.execute("SELECT datname FROM pg_database WHERE datname = '%s';" % dbname)
+                list_database = cur.fetchall()
+
+                if len(list_database) > 0:
+                    pass
+                else:
+                    create_db_postgres(dbname)
+                    
+            except Exception as err:
+                print(err)
                 create_db_postgres(dbname)
-                
-        except Exception as err:
-            print(err)
-            #create_db_postgres(dbname)
-    
-    cur.close()
-    conn.close()
+        
+        cur.close()
+        conn.close()
 
 def create_db_postgres(dbname):
     try:
