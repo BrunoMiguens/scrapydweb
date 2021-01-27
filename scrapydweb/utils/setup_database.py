@@ -11,7 +11,7 @@ DB_JOBS = 'scrapydweb_jobs'
 DBS = [DB_APSCHEDULER, DB_TIMERTASKS, DB_METADATA, DB_JOBS]
 
 PATTERN_MYSQL = re.compile(r'mysql://(.+?)(?::(.+?))?@(.+?):(\d+)')
-PATTERN_POSTGRESQL = re.compile(r'postgres://(.+?)(?::(.+?))?@(.+?):(\d+)')
+PATTERN_POSTGRESQL = re.compile(r'postgresql://(.+?)(?::(.+?))?@(.+?):(\d+)')
 PATTERN_SQLITE = re.compile(r'sqlite:///(.+)$')
 
 SCRAPYDWEB_TESTMODE = os.environ.get('SCRAPYDWEB_TESTMODE', 'False').lower() == 'true'
@@ -29,6 +29,19 @@ def setup_database(database_url, database_path):
     database_url = re.sub(r'/$', '', database_url)
     database_path = re.sub(r'\\', '/', database_path)
     database_path = re.sub(r'/$', '', database_path)
+    unify_database_name = os.environ.get('UNIFY_DATABASE_NAME', 'True').lower() == 'true'
+
+    if unify_database_name:
+        database_name = re.search(r'[^\/]+$', database_url)
+        found_database_name = database_name != None
+
+        DB_APSCHEDULER = database_name.group() if found_database_name else DB_APSCHEDULER
+        DB_TIMERTASKS = database_name.group() if found_database_name else DB_TIMERTASKS
+        DB_METADATA = database_name.group() if found_database_name else DB_METADATA
+        DB_JOBS = database_name.group() if found_database_name else DB_JOBS
+        DBS = [DB_APSCHEDULER, DB_TIMERTASKS, DB_METADATA, DB_JOBS]
+
+        unify_database_name = found_database_name
 
     m_mysql, m_postgres, m_sqlite = test_database_url_pattern(database_url)
     if m_mysql:
@@ -44,11 +57,11 @@ def setup_database(database_url, database_path):
             os.mkdir(database_path)
 
     if m_mysql or m_postgres:
-        APSCHEDULER_DATABASE_URI = '/'.join([database_url, DB_APSCHEDULER])
-        SQLALCHEMY_DATABASE_URI = '/'.join([database_url, DB_TIMERTASKS])
+        APSCHEDULER_DATABASE_URI = database_url if unify_database_name else '/'.join([database_url, DB_APSCHEDULER])
+        SQLALCHEMY_DATABASE_URI = database_url if unify_database_name else '/'.join([database_url, DB_TIMERTASKS])
         SQLALCHEMY_BINDS = {
-            'metadata': '/'.join([database_url, DB_METADATA]),
-            'jobs': '/'.join([database_url, DB_JOBS])
+            'metadata': database_url if unify_database_name else '/'.join([database_url, DB_METADATA]),
+            'jobs': database_url if unify_database_name else '/'.join([database_url, DB_JOBS])
         }
     else:
         # db names for backward compatibility
@@ -131,7 +144,7 @@ def setup_postgresql(username, password, host, port):
     except (ImportError, AssertionError):
         sys.exit("Run command: %s" % install_command)
 
-    conn = psycopg2.connect(host=host, port=int(port), user=username, password=password)
+    conn = psycopg2.connect(dbname="postgres", host=host, port=int(port), user=username, password=password)
     conn.set_isolation_level(0)  # https://wiki.postgresql.org/wiki/Psycopg2_Tutorial
     cur = conn.cursor()
     for dbname in DBS:
@@ -154,15 +167,29 @@ def setup_postgresql(username, password, host, port):
         # (Chinese (Simplified)_People's Republic of China.936)
         # HINT:  Use the same collation as in the template database, or use template0 as template.
         try:
-            cur.execute("CREATE DATABASE %s ENCODING 'UTF8' LC_COLLATE 'en_US.UTF-8' LC_CTYPE 'en_US.UTF-8'" % dbname)
+            cur.execute("SELECT datname FROM pg_database WHERE datname = '%s';" % dbname)
+            list_database = cur.fetchall()
+
+            if len(list_database) > 0:
+                pass
+            else:
+                create_db_postgres(dbname)
+                
         except:
-            try:
-                cur.execute("CREATE DATABASE %s" % dbname)
-            except Exception as err:
-                # psycopg2.ProgrammingError: database "scrapydweb_apscheduler" already exists
-                if 'exists' in str(err):
-                    pass
-                else:
-                    raise
+            create_db_postgres(dbname)
+    
     cur.close()
     conn.close()
+
+def create_db_postgres(dbname):
+    try:
+        cur.execute("CREATE DATABASE %s ENCODING 'UTF8' LC_COLLATE 'en_US.UTF-8' LC_CTYPE 'en_US.UTF-8'" % dbname)
+    except:
+        try:
+            cur.execute("CREATE DATABASE %s" % dbname)
+        except Exception as err:
+            # psycopg2.ProgrammingError: database "scrapydweb_apscheduler" already exists
+            if 'exists' in str(err):
+                pass
+            else:
+                raise
