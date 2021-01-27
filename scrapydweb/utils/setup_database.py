@@ -11,7 +11,7 @@ DB_JOBS = 'scrapydweb_jobs'
 DBS = [DB_APSCHEDULER, DB_TIMERTASKS, DB_METADATA, DB_JOBS]
 
 PATTERN_MYSQL = re.compile(r'mysql://(.+?)(?::(.+?))?@(.+?):(\d+)')
-PATTERN_POSTGRESQL = re.compile(r'postgresql://(.+?)(?::(.+?))?@(.+?):(\d+)')
+PATTERN_POSTGRESQL = re.compile(r'postgres://(.+?)(?::(.+?))?@(.+?):(\d+)')
 PATTERN_SQLITE = re.compile(r'sqlite:///(.+)$')
 
 SCRAPYDWEB_TESTMODE = os.environ.get('SCRAPYDWEB_TESTMODE', 'False').lower() == 'true'
@@ -57,11 +57,11 @@ def setup_database(database_url, database_path):
             os.mkdir(database_path)
 
     if m_mysql or m_postgres:
-        APSCHEDULER_DATABASE_URI = database_url if unify_database_name else '/'.join([database_url, DB_APSCHEDULER])
-        SQLALCHEMY_DATABASE_URI = database_url if unify_database_name else '/'.join([database_url, DB_TIMERTASKS])
+        APSCHEDULER_DATABASE_URI = database_url.replace('postgres://', 'postgresql://') if unify_database_name else '/'.join([database_url, DB_APSCHEDULER])
+        SQLALCHEMY_DATABASE_URI = database_url.replace('postgres://', 'postgresql://') if unify_database_name else '/'.join([database_url, DB_TIMERTASKS])
         SQLALCHEMY_BINDS = {
-            'metadata': database_url if unify_database_name else '/'.join([database_url, DB_METADATA]),
-            'jobs': database_url if unify_database_name else '/'.join([database_url, DB_JOBS])
+            'metadata': database_url.replace('postgres://', 'postgresql://') if unify_database_name else '/'.join([database_url, DB_METADATA]),
+            'jobs': database_url.replace('postgres://', 'postgresql://') if unify_database_name else '/'.join([database_url, DB_JOBS])
         }
     else:
         # db names for backward compatibility
@@ -175,8 +175,9 @@ def setup_postgresql(username, password, host, port):
             else:
                 create_db_postgres(dbname)
                 
-        except:
-            create_db_postgres(dbname)
+        except Exception as err:
+            print(err)
+            #create_db_postgres(dbname)
     
     cur.close()
     conn.close()

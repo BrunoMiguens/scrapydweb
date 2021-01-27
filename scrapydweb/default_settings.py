@@ -365,7 +365,7 @@ DATA_PATH = os.environ.get('DATA_PATH', '')
 # 'postgres://username:password@127.0.0.1:5432'
 # 'sqlite:///C:/Users/username'
 # 'sqlite:////home/username'
-DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://my_user:my_password@127.0.0.1:5432/scrapyweb')
+DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
 # Use this property to use the same database instead of creating a new database when needed
 # Specially useful when using a DB on the Cloud where you only ahve access to one database
